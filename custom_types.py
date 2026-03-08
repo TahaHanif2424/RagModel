@@ -18,4 +18,4 @@ class RAGSearchResult(pydantic.BaseModel):
 class RAGQueryResult(pydantic.BaseModel):
     answer: str
     sources: list[str]
-    num_context: int
+    num_contexts: int
