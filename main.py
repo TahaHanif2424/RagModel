@@ -9,6 +9,7 @@ import os
 import datetime
 from data_loader import load_and_chunk_pdf,embed_texts
 from vector_db import QdrantStorage
+from custom_types import RAGSearchResult,RAGQueryResult,RAGUpsertResult,RAGChunkAndSrc
 
 load_dotenv()
 
@@ -24,7 +25,13 @@ inngest_client = inngest.Inngest(
     trigger=inngest.TriggerEvent(event="rag/ingest_pdf")
 )
 async def rag_ingest_pdf(ctx:inngest.Context):
-    return {"Hello":"World"}
+    def _load(ctx:inngest.Context) -> RAGChunkAndSrc
+        pass
+    def _upsert(chunks_and_src: RAGChunkAndSrc) -> RAGUpsertResult
+        pass
+    chunks_and_src= await ctx.step.run("load_and_chunk", lambda : _load(ctx), output_type=RAGChunkAndSrc)
+    ingested= await ctx.step.run("embed_and_upsert", lambda : _upsert(chunks_and_src), output_type=RAGUpsertResult)
+    return ingested.model_dump()
 
 app = FastAPI()
 
