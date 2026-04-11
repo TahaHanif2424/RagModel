@@ -2,14 +2,13 @@ import logging
 from fastapi import FastAPI
 import inngest
 import inngest.fast_api
-from inngest.experimental import ai
+from inngest.experimental.ai import gemini
 from dotenv import load_dotenv
 import uuid
 import os
-import datetime
 from data_loader import load_and_chunk_pdf,embed_texts
 from vector_db import QdrantStorage
-from custom_types import RAGSearchResult,RAGQueryResult,RAGUpsertResult,RAGChunkAndSrc
+from custom_types import RAGSearchResult,RAGUpsertResult,RAGChunkAndSrc
 
 load_dotenv()
 
@@ -73,21 +72,76 @@ async def rag_query_pdf_ai(ctx: inngest.Context):
         "Answer concisely using the context above."
     )
 
-    adapter = ai.openai.Adapter(
-        auth_key=os.getenv("OPENAI_API_KEY"),
-        model="gpt-4o-mini"
-    )
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise ValueError("Missing GOOGLE_API_KEY. Add it to your .env file before running rag/query_pdf_ai.")
 
-    res = await ctx.step.ai.infer(
-        "llm-answer",
-        adapter=adapter,
-        body={
-            "max_tokens": 1024,
-            "tempature": 0.2
-        }
-    )
+    configured_model = os.getenv("GEMINI_MODEL", "").strip()
+    model_candidates = [m for m in [
+        configured_model,
+        "gemini-2.0-flash-lite",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash-8b",
+        "gemini-1.5-flash",
+    ] if m]
+
+    # Keep order while removing duplicates.
+    model_candidates = list(dict.fromkeys(model_candidates))
+
+    res = None
+    last_error = None
+    for model_name in model_candidates:
+        adapter = gemini.Adapter(auth_key=api_key, model=model_name)
+        try:
+            step_id = f"llm-answer-{model_name.replace('.', '-')}"
+            res = await ctx.step.ai.infer(
+                step_id,
+                adapter=adapter,
+                body={
+                    "contents": [
+                        {
+                            "role": "user",
+                            "parts": [
+                                {
+                                    "text": (
+                                        "You answer questions using only the provided context. "
+                                        "If the answer is not in context, say you do not know.\n\n"
+                                        + user_content
+                                    )
+                                }
+                            ],
+                        }
+                    ],
+                    "generationConfig": {
+                        "temperature": 0.2,
+                        "maxOutputTokens": 1024
+                    }
+                }
+            )
+            break
+        except Exception as exc:
+            last_error = exc
+            msg = str(exc).lower()
+            if "not_found" in msg or "is not found" in msg or "models/" in msg:
+                continue
+            raise
+
+    if res is None:
+        raise RuntimeError(
+            "No supported Gemini model found for this key/project. "
+            f"Tried: {', '.join(model_candidates)}. Last error: {last_error}"
+        )
+    answer = ""
+    if isinstance(res, dict):
+        candidates = res.get("candidates", [])
+        if candidates:
+            parts = (((candidates[0] or {}).get("content", {}) or {}).get("parts", []))
+            if parts and isinstance(parts[0], dict):
+                answer = parts[0].get("text", "") or ""
+    answer = answer.strip() if isinstance(answer, str) else str(answer)
+    return {"answer": answer, "sources": found.sources, "num_contexts": len(found.contexts)}
 
 
 app = FastAPI()
 
-inngest.fast_api.serve(app,inngest_client,functions=[rag_ingest_pdf])
+inngest.fast_api.serve(app,inngest_client,functions=[rag_ingest_pdf, rag_query_pdf_ai])
